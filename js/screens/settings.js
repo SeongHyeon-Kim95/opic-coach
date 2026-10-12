@@ -100,7 +100,7 @@ function render() {
   <div class="card">
     <label class="switch"><span>실전 모드<br><span class="tiny muted">질문을 귀로만 듣기 (글은 가려짐), 다시 듣기 1회</span></span><input type="checkbox" data-bind="settings.examMode" ${s.examMode ? 'checked' : ''}></label>
     <label class="switch"><span>녹음 파일 보관<br><span class="tiny muted">최근 60개까지 답변 기록에서 다시 듣기</span></span><input type="checkbox" data-bind="settings.keepAudio" ${s.keepAudio ? 'checked' : ''}></label>
-    <label class="switch"><span>AI 원어민 음성 (Ava)<br><span class="tiny muted">질문·업그레이드 답변을 자연스러운 AI 음성으로. 실패하면 폰 음성</span></span><input type="checkbox" data-bind="settings.aiVoice" ${s.aiVoice !== false ? 'checked' : ''}></label>
+    <label class="switch"><span>AI 원어민 음성 (Ava)<br><span class="tiny muted">질문·업그레이드 답변 전체 듣기에만 사용. 무료 한도가 하루 약 20~30문장이라, 다 쓰면 자동으로 폰 음성</span></span><input type="checkbox" data-bind="settings.aiVoice" ${s.aiVoice !== false ? 'checked' : ''}></label>
     <label class="field"><span>AI 음성 목소리</span>
       <select data-bind="settings.aiVoiceName">${voice.AI_VOICES.map(([id, ko]) => `<option value="${id}" ${(s.aiVoiceName || 'Aoede') === id ? 'selected' : ''}>${id} · ${ko}</option>`).join('')}</select></label>
     <button class="btn sm soft" data-act="testai" style="margin-top:8px">${icon('volume')} AI 음성 들어보기</button>
@@ -130,7 +130,7 @@ function render() {
   <div class="card small">
     ${isStandalone() ? '<p style="margin:0">✓ 홈 화면 앱으로 실행 중이에요.</p>' : `
     <p style="margin-top:0"><b>갤럭시 (크롬)</b>: 오른쪽 위 ⋮ → <b>홈 화면에 추가</b> (또는 앱 설치)</p>
-    <p style="margin-bottom:0"><b>아이폰 (사파리)</b>: 아래 공유 버튼 → <b>홈 화면에 추가</b></p>`}
+    <p style="margin-bottom:0"><b>아이폰 (사파리)</b>: 아래 공유 버튼(□↑) → <b>홈 화면에 추가</b> → 그 아이콘으로 열어서 키를 넣으세요 (사파리 탭과 저장 공간이 따로예요)</p>`}
     <p class="tiny muted" style="margin-bottom:0">오픽 데일리 · 단어장 원본: 내 OPIc 단어장(오픽노잼 정리)</p>
   </div>`;
   unbindKey = bindKeyBlock($('#key-card'));
@@ -202,7 +202,7 @@ async function onClick(e) {
       if (!state.settings.apiKey) return toast('먼저 키를 넣어 주세요');
       t.disabled = true;
       return voice.say('Hi, I\'m Ava. Tell me about your favorite cafe. What do you usually do there?', {
-        waitMs: 15000, onStart: (k) => { t.disabled = false; if (k !== 'ai') toast('AI 음성을 못 만들어서 폰 음성으로 재생해요'); },
+        waitMs: 15000, onStart: (k) => { t.disabled = false; if (k === 'device') toast('AI 음성을 못 만들어서 폰 음성으로 재생해요'); if (k === 'none') toast('재생이 막혔어요. 한 번 더 눌러 주세요'); },
       });
     case 'testvoice': voice.stopAll(); return tts.speak('Hi, I\'m Ava. Tell me about your favorite cafe. What do you usually do there?');
     case 'export': {

@@ -108,17 +108,27 @@ async function start() {
 }
 
 function enterQuestion() {
-  Object.assign(M, { phase: 'question', plays: 0, showText: false, error: '' });
+  Object.assign(M, { phase: 'question', plays: 0, voiceLoading: false, showText: false, error: '' });
   render();
   window.scrollTo(0, 0);
   listen();
 }
 
 function listen() {
-  M.plays++;
+  const set = M;
+  const idx = M.idx;
+  M.voiceLoading = true;
   if (M.phase === 'question') renderQuestion();
-  $('#ava')?.classList.add('talking');
-  voice.say(M.items[M.idx].question.q, { onEnd: () => $('#ava')?.classList.remove('talking') });
+  voice.say(M.items[idx].question.q, {
+    onStart: (kind) => {
+      if (M !== set || M.idx !== idx) return;
+      M.voiceLoading = false;
+      if (kind !== 'none') M.plays++;
+      if (M.phase === 'question') renderQuestion();
+      if (kind !== 'none') $('#ava')?.classList.add('talking');
+    },
+    onEnd: () => $('#ava')?.classList.remove('talking'),
+  });
 }
 
 // ---------------- 화면 ----------------
@@ -168,7 +178,7 @@ function renderQuestion() {
   ${M.notice && M.idx === 0 ? `<div class="banner small">${icon('bulb')}<div>${esc(M.notice)}</div></div>` : ''}
   <div class="card center">
     <div class="ava" id="ava">Ava</div>
-    <button class="btn primary" data-act="listen" ${M.plays >= 2 ? 'disabled' : ''}>${icon(M.plays ? 'replay' : 'play')} ${M.plays ? `다시 듣기 (${Math.max(0, 2 - M.plays)}회 남음)` : '질문 듣기'}</button>
+    <button class="btn primary" data-act="listen" ${M.plays >= 2 || M.voiceLoading ? 'disabled' : ''}>${M.voiceLoading ? '음성 준비 중…' : `${icon(M.plays ? 'replay' : 'play')} ${M.plays ? `다시 듣기 (${Math.max(0, 2 - M.plays)}회 남음)` : '질문 듣기'}`}</button>
     ${M.showText ? `<div class="q-text en" style="margin-top:14px;text-align:left;font-size:16px">${esc(q.q)}</div>` : `<div style="margin-top:12px"><button class="btn xs ghost" data-act="showtext">${icon('eye')} 글로 보기 (실제 시험엔 없음)</button></div>`}
   </div>
   ${M.error ? `<div class="banner small" style="margin-top:12px">${icon('bulb')}<div>${esc(M.error)}</div></div>` : ''}

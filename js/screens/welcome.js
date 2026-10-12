@@ -3,6 +3,7 @@ import { state, save } from '../store.js';
 import { esc, icon } from '../util.js';
 import { keyBlockHTML, bindKeyBlock } from '../keysetup.js';
 import { profileFieldsHTML, surveyHTML, toggleSurvey } from './settings.js';
+import { isIOS, isStandalone, IOS_INSTALL_TIP } from '../install.js';
 
 const STEPS = [
   { title: 'AI 연결', sub: '질문을 만들고 내 답변을 채점할 AI (무료)' },
@@ -45,6 +46,7 @@ function render() {
   <div class="head"><div><div class="eyebrow">시작하기 ${step + 1}/3</div><h1 class="title">${esc(st.title)}</h1>
     <p class="small muted" style="margin:4px 0 0">${esc(st.sub)}</p></div></div>
   <div class="qdots">${STEPS.map((_, i) => `<i class="${i < step ? 'done' : i === step ? 'now' : ''}"></i>`).join('')}</div>
+  ${step === 0 && isIOS() && !isStandalone() ? `<div class="banner">${icon('download')}<div>${IOS_INSTALL_TIP}</div></div>` : ''}
   <div class="card" id="step-card">
     ${step === 0 ? keyBlockHTML() : step === 1 ? surveyHTML() : profileFieldsHTML(false)}
   </div>

@@ -107,37 +107,65 @@ export function synthesize(text) {
   return p;
 }
 
+// 아이폰 사파리는 사용자가 화면을 터치한 순간에 한 번 재생해 둔 오디오만 나중에 자동 재생할 수 있다.
+// 그래서 하나의 audio 요소를 첫 터치 때 무음으로 "잠금 해제"해 두고 계속 재사용한다.
+const player = new Audio();
+const SILENT = 'data:audio/wav;base64,UklGRuwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YcgAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
+let unlocked = false;
+function unlock() {
+  if (unlocked) return;
+  unlocked = true;
+  player.src = SILENT;
+  player.play().then(() => player.pause()).catch(() => { unlocked = false; });
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    window.speechSynthesis?.speak(u);
+  } catch { /* 음성 합성 미지원 */ }
+}
+addEventListener('touchend', unlock, { capture: true, passive: true });
+addEventListener('click', unlock, { capture: true });
+
 let current = null;
+let sayToken = 0;
 export function stopAll() {
-  if (current) { current.pause(); current = null; }
+  sayToken++;
+  if (current) { player.pause(); current = null; }
   tts.stop();
 }
 
 /**
  * AI 음성으로 읽고, 준비가 안 되면 폰 음성으로 읽는다.
  * waitMs: AI 음성을 기다리는 최대 시간. cachedOnly: 이미 만든 음성만 쓰고 새로 만들지 않음 (카드처럼 자주 읽는 곳)
- * onStart(kind): 'ai' | 'device'
+ * onStart(kind): 'ai' | 'device' | 'none'(재생 못 함 — 사용자가 다시 눌러야 함)
  */
 export async function say(text, { waitMs = 9000, cachedOnly = false, onStart, onEnd } = {}) {
   stopAll();
+  const my = sayToken;
+  let started = false;
+  const start = (kind) => { if (!started && my === sayToken) { started = true; onStart?.(kind); } };
   let blob = null;
   if (aiVoiceOn()) {
     blob = cachedOnly
       ? await cached(text)
       : await Promise.race([synthesize(text), new Promise((r) => setTimeout(() => r(null), waitMs))]);
   }
+  if (my !== sayToken) return; // 기다리는 사이 다른 재생이나 화면 이동이 있었음
   if (blob) {
-    const audio = new Audio(URL.createObjectURL(blob));
-    current = audio;
-    audio.onended = () => { URL.revokeObjectURL(audio.src); if (current === audio) current = null; onEnd?.(); };
+    const url = URL.createObjectURL(blob);
+    const token = {};
+    current = token;
+    player.onended = () => { URL.revokeObjectURL(url); if (current === token) { current = null; onEnd?.(); } };
+    player.src = url;
     try {
-      await audio.play();
-      onStart?.('ai');
+      await player.play();
+      start('ai');
       return;
     } catch {
       current = null;
+      URL.revokeObjectURL(url);
     }
   }
-  onStart?.('device');
-  tts.speak(text, { onEnd });
+  tts.speak(text, { onStart: () => start('device'), onEnd });
+  setTimeout(() => start('none'), 4000); // 폰 음성도 시작 못 하면 (자동 재생 차단 등) 알려 준다
 }

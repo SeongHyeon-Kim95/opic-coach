@@ -3,7 +3,7 @@ import { esc, icon, today, addDays, fmtDateKo, daysBetween } from '../util.js';
 import { TOPICS } from '../data/topics.js';
 import { todayTopic } from '../plan.js';
 import { dueCards, newRemainingToday } from '../srs.js';
-import { installPrompt, promptInstall } from '../install.js';
+import { installPrompt, promptInstall, isIOS, isStandalone, IOS_INSTALL_TIP } from '../install.js';
 
 export function mount(el) {
   const { settings, profile } = state;
@@ -40,6 +40,7 @@ export function mount(el) {
   </div>
 
   ${setupNeeded.length ? `<a class="banner" href="#/welcome" style="text-decoration:none">${icon('sparkle')}<div class="grow"><b>시작 전 1분 설정</b><br><span class="small">${setupNeeded.join(' · ')} — AI가 내 상황에 맞는 질문과 피드백을 만들어요.</span></div>${icon('chevron')}</a>` : ''}
+  ${isIOS() && !isStandalone() ? `<div class="banner">${icon('download')}<div>${IOS_INSTALL_TIP}</div></div>` : ''}
   ${installPrompt() ? `<button class="banner" data-act="install" style="width:100%;border:none;text-align:left;cursor:pointer">${icon('download')}<div class="grow"><b>홈 화면에 앱으로 설치</b><br><span class="small">아이콘 한 번으로 바로 열려요.</span></div></button>` : ''}
 
   <div class="card primary">

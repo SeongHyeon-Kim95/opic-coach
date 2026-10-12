@@ -142,7 +142,7 @@ async function prefetchVoices(set) {
 }
 
 function enterQuestion(retry = false) {
-  Object.assign(S, { phase: 'question', played: 0, showText: retry || !state.settings.examMode, error: '' });
+  Object.assign(S, { phase: 'question', played: 0, voiceLoading: false, showText: retry || !state.settings.examMode, error: '' });
   render();
   window.scrollTo(0, 0);
   if (!retry && (navigator.userActivation?.hasBeenActive ?? true)) listen();
@@ -192,8 +192,8 @@ function renderQuestion() {
   ${S.notice && S.idx === 0 ? `<div class="banner small">${icon('bulb')}<div>${esc(S.notice)}</div></div>` : ''}
   <div class="card center">
     <div class="ava" id="ava">Ava</div>
-    <button class="btn primary" data-act="listen" ${left ? '' : 'disabled'}>
-      ${icon(S.played ? 'replay' : 'play')} ${S.played ? (exam ? `다시 듣기 (${left}회 남음)` : '다시 듣기') : '질문 듣기'}
+    <button class="btn primary" data-act="listen" ${left && !S.voiceLoading ? '' : 'disabled'}>
+      ${S.voiceLoading ? '음성 준비 중…' : `${icon(S.played ? 'replay' : 'play')} ${S.played ? (exam ? `다시 듣기 (${left}회 남음)` : '다시 듣기') : '질문 듣기'}`}
     </button>
     <div class="blur-box ${S.showText ? '' : 'blurred'}" style="margin-top:16px;text-align:left">
       <div class="q-text en">${esc(q.q)}${q.ko ? `<span class="ko">${esc(q.ko)}</span>` : ''}</div>
@@ -210,12 +210,20 @@ function renderQuestion() {
 }
 
 function listen() {
+  const set = S;
   const q = cur().question;
-  S.played++;
+  S.voiceLoading = true;
   if (S.phase === 'question') renderQuestion();
-  const ava = $('#ava');
-  ava?.classList.add('talking');
-  voice.say(q.q, { onEnd: () => $('#ava')?.classList.remove('talking') });
+  voice.say(q.q, {
+    onStart: (kind) => {
+      if (S !== set) return;
+      S.voiceLoading = false;
+      if (kind !== 'none') S.played++;
+      if (S.phase === 'question') renderQuestion();
+      if (kind !== 'none') $('#ava')?.classList.add('talking');
+    },
+    onEnd: () => $('#ava')?.classList.remove('talking'),
+  });
 }
 
 // ---------------- 녹음 ----------------

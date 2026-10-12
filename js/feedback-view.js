@@ -102,7 +102,7 @@ export function renderFeedback(fb, { durationSec, inputType } = {}) {
           <button class="icon-btn" data-fb="save-line" data-i="${i}" aria-label="노트에 저장">${icon('plus')}</button>
         </div></div>`).join('')}
     </div>
-    <p class="tiny muted" style="margin-top:8px">통째로 외우지 말고 <b>가리고 말하기</b>로 한국어만 보고 내 말투로 말해 보세요. 원어민 음성에 0.5초 늦게 따라 말하면(쉐도잉) 리듬이 붙어요.</p>
+    <p class="tiny muted" style="margin-top:8px">통째로 외우지 말고 <b>가리고 말하기</b>로 한국어만 보고 내 말투로 말해 보세요. 원어민 음성에 0.5초 늦게 따라 말하면(쉐도잉) 리듬이 붙어요. 원어민 음성은 한 번 만들면 저장돼서 다시 들을 때는 무료예요.</p>
   </div>
 
   ${fb.expressions?.length ? `
@@ -154,13 +154,17 @@ export function bindFeedback(root, fb, ctx) {
     const i = +b.dataset.i;
     const lines = (fb.upgraded || []).map((s) => s.en);
     if (act === 'say') voice.say(b.dataset.text, { cachedOnly: true });
-    if (act === 'say-line') voice.say(fb.upgraded[i].en, { waitMs: 4000 });
+    if (act === 'say-line') voice.say(fb.upgraded[i].en, { cachedOnly: true });
     if (act === 'ai-voice') {
       b.disabled = true;
       b.innerHTML = `${icon('volume')} 음성 만드는 중…`;
       voice.say(lines.join(' '), {
         waitMs: 25000,
-        onStart: (kind) => { b.disabled = false; b.innerHTML = `${icon('volume')} ${kind === 'ai' ? '원어민 음성' : '폰 음성으로 재생 중'}`; },
+        onStart: (kind) => {
+          b.disabled = false;
+          b.innerHTML = `${icon('volume')} ${kind === 'device' ? '폰 음성으로 재생 중' : '원어민 음성'}`;
+          if (kind === 'none') toast('재생이 막혔어요. 버튼을 한 번 더 눌러 주세요');
+        },
       });
     }
     if (act === 'play-all') {

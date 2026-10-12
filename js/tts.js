@@ -46,7 +46,7 @@ export function stop() {
  * 문장 단위로 끊어 읽는다 (안드로이드 크롬의 긴 문장 끊김 방지).
  * lines: 문자열 또는 문자열 배열. onLine(i): 읽기 시작한 줄 번호.
  */
-export function speak(lines, { rate, onLine, onEnd } = {}) {
+export function speak(lines, { rate, onLine, onStart, onEnd } = {}) {
   if (!synth) return onEnd?.();
   stop();
   const my = session;
@@ -64,6 +64,7 @@ export function speak(lines, { rate, onLine, onEnd } = {}) {
     u.rate = rate ?? state.settings.tts.rate;
     u.onend = next;
     u.onerror = next;
+    if (n === 1 && onStart) u.onstart = () => onStart();
     if (first) onLine?.(i);
     synth.speak(u);
   };

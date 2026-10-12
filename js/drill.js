@@ -27,7 +27,7 @@ export function openDrill(lines, { title = '가리고 말하기' } = {}) {
           : `<button class="btn sm soft" data-d="reveal" style="align-self:center">${icon('eye')} 영어 보기</button>`}
       </div>
       <div class="btn-row" style="margin-top:12px">
-        <button class="btn" data-d="native">${icon('volume')} 원어민</button>
+        <button class="btn" data-d="native">${icon('volume')} 듣기</button>
         ${D.rec
           ? `<button class="btn accent" data-d="stop">${icon('stop')} 정지</button>`
           : `<button class="btn" data-d="rec" ${canRecord() ? '' : 'disabled'}>${icon('mic')} 내 녹음</button>`}
@@ -58,7 +58,7 @@ export function openDrill(lines, { title = '가리고 말하기' } = {}) {
     const line = lines[D.i];
     switch (b.dataset.d) {
       case 'reveal': D.showEn = true; return draw();
-      case 'native': return voice.say(line.en, { waitMs: 6000 });
+      case 'native': return voice.say(line.en, { cachedOnly: true }); // AI 음성 무료 한도(하루 수십 문장)를 질문용으로 아낀다
       case 'rec':
         voice.stopAll();
         D.rec = new Recorder();
