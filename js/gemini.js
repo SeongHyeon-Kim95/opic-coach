@@ -11,6 +11,15 @@ export class AiError extends Error {
   }
 }
 
+// 바쁘거나 한도가 찬 모델은 10분 동안 순서를 뒤로 미룬다 (매번 기다리지 않도록)
+const COOLDOWN_MS = 10 * 60 * 1000;
+const cooling = new Map();
+function modelOrder(models) {
+  const now = Date.now();
+  const ok = models.filter((m) => !(cooling.get(m) > now));
+  return [...ok, ...models.filter((m) => !ok.includes(m))];
+}
+
 function thinkingFor(model, level) {
   if (/gemini-2\.5/.test(model)) {
     if (/lite/.test(model)) return {};
@@ -28,7 +37,7 @@ export async function generate({ system, parts, schema, thinking = 'low', temper
   const { apiKey, models } = state.settings;
   if (!apiKey) throw new AiError('NO_KEY', 'Gemini API 키가 없어요. 설정에서 키를 입력해 주세요.');
   let lastErr = new AiError('NO_MODEL', '사용할 모델이 설정되어 있지 않아요.');
-  for (const model of models) {
+  for (const model of modelOrder(models)) {
     onModel?.(model);
     const body = {
       systemInstruction: { parts: [{ text: system }] },
@@ -56,6 +65,7 @@ export async function generate({ system, parts, schema, thinking = 'low', temper
           throw new AiError('BAD_KEY', 'API 키가 올바르지 않아요. 설정에서 키를 다시 확인해 주세요.');
         }
         lastErr = new AiError(res.status === 429 ? 'QUOTA' : 'HTTP', `${model}: ${res.status} ${msg}`);
+        if (res.status === 429 || res.status >= 500) cooling.set(model, Date.now() + COOLDOWN_MS);
         continue;
       }
       const cand = data.candidates?.[0];
@@ -64,12 +74,16 @@ export async function generate({ system, parts, schema, thinking = 'low', temper
         lastErr = new AiError('EMPTY', `${model}: 빈 응답 (${cand?.finishReason || data.promptFeedback?.blockReason || '이유 불명'})`);
         continue;
       }
+      const parsed = JSON.parse(text);
+      cooling.delete(model);
       bump('ai');
-      return { data: JSON.parse(text), model: data.modelVersion || model };
+      return { data: parsed, model: data.modelVersion || model };
     } catch (e) {
       if (e instanceof AiError && e.code === 'BAD_KEY') throw e;
-      if (e.name === 'AbortError') lastErr = new AiError('TIMEOUT', `${model}: 응답 시간 초과`);
-      else if (e instanceof SyntaxError) lastErr = new AiError('PARSE', `${model}: 응답 형식 오류`);
+      if (e.name === 'AbortError') {
+        lastErr = new AiError('TIMEOUT', `${model}: 응답 시간 초과`);
+        cooling.set(model, Date.now() + COOLDOWN_MS);
+      } else if (e instanceof SyntaxError) lastErr = new AiError('PARSE', `${model}: 응답 형식 오류`);
       else lastErr = new AiError('NET', navigator.onLine ? `${model}: ${e.message}` : '인터넷 연결을 확인해 주세요.');
     } finally {
       clearTimeout(timer);
