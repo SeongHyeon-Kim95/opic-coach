@@ -1,0 +1,230 @@
+import { state, save, flush, exportJSON, importJSON, resetAll, dayStat, DEFAULT_MODELS } from '../store.js';
+import { $, esc, icon, toast, confirmBox } from '../util.js';
+import { SURVEY_GROUPS, JOB_OPTIONS, LIVING_OPTIONS } from '../data/topics.js';
+import { testKey, friendlyError } from '../gemini.js';
+import * as tts from '../tts.js';
+import { isStandalone } from '../install.js';
+
+let el;
+
+export function mount(root) {
+  el = root;
+  render();
+  // 음성 목록은 늦게 로드되는 경우가 있어 선택칸만 다시 채운다
+  const off = tts.onVoices(() => {
+    const sel = el.querySelector('[data-bind="settings.tts.voice"]');
+    if (sel) sel.innerHTML = voiceOptions();
+  });
+  return () => { off(); tts.stop(); };
+}
+
+function voiceOptions() {
+  const cur = state.settings.tts.voice;
+  return `<option value="">자동 (가장 자연스러운 미국 음성)</option>${tts.englishVoices()
+    .map((v) => `<option value="${esc(v.voiceURI)}" ${cur === v.voiceURI ? 'selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}`;
+}
+
+const opt = (list, cur) => list.map((o) => `<option value="${o.id}" ${o.id === cur ? 'selected' : ''}>${esc(o.ko)}</option>`).join('');
+
+function render() {
+  const { settings: s, profile: p } = state;
+  const voices = tts.englishVoices();
+  const surveyCount = p.survey.length;
+  el.onclick = onClick;
+  el.onchange = onChange;
+  el.oninput = onInput;
+  el.innerHTML = `
+  <div class="head"><div><div class="eyebrow">설정</div><h1 class="title">나에게 맞추기</h1></div></div>
+
+  <h2 class="sec">${icon('sparkle')} Gemini API 키 <span class="sub">${s.apiKey ? '✓ 설정됨' : '필요'}</span></h2>
+  <div class="card">
+    <p class="small" style="margin-top:0">AI 질문·피드백에 Google Gemini를 써요. <b>무료</b>로 발급되고, 키는 이 폰에만 저장돼요.</p>
+    <ol class="small" style="padding-left:18px;margin:6px 0 12px">
+      <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> 접속 (구글 로그인)</li>
+      <li><b>Create API key</b> → 생성된 키 복사</li>
+      <li>아래 칸에 붙여넣고 <b>저장 후 테스트</b></li>
+    </ol>
+    <div class="row">
+      <input type="password" id="key" class="grow" placeholder="AIza..." value="${esc(s.apiKey)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="icon-btn" data-act="showkey" aria-label="키 보기">${icon('eye')}</button>
+    </div>
+    <button class="btn primary block" data-act="savekey" style="margin-top:10px">저장 후 테스트</button>
+    <p class="tiny muted" id="key-msg" style="margin-bottom:0">오늘 AI 호출 ${dayStat().ai}회 · 무료 한도는 모델별로 하루 수백 회 수준이라 충분해요.</p>
+  </div>
+
+  <h2 class="sec">내 정보 <span class="sub">AI가 내 얘기로 질문·예문을 만들어요</span></h2>
+  <div class="card">
+    <label class="field" style="margin-top:0"><span>영어 이름 (선택)</span><input type="text" data-bind="profile.name" value="${esc(p.name)}" placeholder="예) Sam"></label>
+    <div class="row" style="gap:10px">
+      <label class="field grow"><span>현재 실력</span><input type="text" data-bind="profile.level" value="${esc(p.level)}"></label>
+      <label class="field" style="width:96px"><span>목표</span><select data-bind="profile.target">${['IM2', 'IM3', 'IH', 'AL'].map((l) => `<option ${p.target === l ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    </div>
+    <label class="field"><span>직업 (서베이)</span><select data-bind="profile.job">${opt(JOB_OPTIONS, p.job)}</select></label>
+    <label class="field"><span>회사·업무 설명</span><textarea rows="2" data-bind="profile.jobDesc" placeholder="예) IT 회사 마케팅팀에서 일해요. 회의가 많고 가끔 야근해요.">${esc(p.jobDesc)}</textarea></label>
+    <label class="field"><span>거주 형태 (서베이)</span><select data-bind="profile.living"><option value="">선택해 주세요</option>${opt(LIVING_OPTIONS, p.living)}</select></label>
+    <label class="field"><span>사는 곳·집 설명</span><textarea rows="2" data-bind="profile.livingDesc" placeholder="예) 서울 아파트에 가족과 살아요. 거실 창으로 공원이 보여요.">${esc(p.livingDesc)}</textarea></label>
+    <label class="field"><span>나에 대한 사실들 (자유롭게)</span><textarea rows="4" data-bind="profile.facts" placeholder="예) 주 3회 퇴근 후 헬스. 주말엔 카페에서 책 읽기. 작년 여름 오사카 여행. 넷플릭스 드라마 좋아함.">${esc(p.facts)}</textarea></label>
+    <p class="tiny muted" style="margin-bottom:0">실제와 같을수록 좋아요. 오픽은 "솔직한 내 얘기"가 가장 자연스럽게 나와요.</p>
+  </div>
+
+  <h2 class="sec">서베이 주제 <span class="sub">${surveyCount}개 선택 · 12개 이상 권장</span></h2>
+  <div class="card">
+    ${SURVEY_GROUPS.map((g) => `<div class="eyebrow" style="margin:${g === SURVEY_GROUPS[0] ? 0 : 16}px 0 8px">${esc(g.ko)}</div>
+      <div class="chips">${g.items.map(([id, ko]) => `<button class="chip sm ${p.survey.includes(id) ? 'on' : ''}" data-survey="${id}">${esc(ko)}</button>`).join('')}</div>`).join('')}
+    <p class="tiny muted" style="margin-bottom:0">실제 시험에서 고를 항목 그대로 선택하세요. 오늘의 콤보 주제와 새 카드 순서가 여기에 맞춰져요.</p>
+  </div>
+
+  <h2 class="sec">하루 목표</h2>
+  <div class="card">
+    ${[['speak', '말하기 (문항)', 1, 15], ['review', '카드 복습 (장)', 5, 200], ['newCards', '새 표현 (장)', 0, 50]].map(([k, label, min, max]) => `
+      <div class="row between" style="padding:6px 0"><span>${label}</span>
+        <div class="row" style="gap:6px"><button class="btn xs" data-step="${k}" data-d="-1">−</button>
+        <input type="number" data-goal="${k}" min="${min}" max="${max}" value="${s.goals[k]}" style="width:66px;min-height:36px;text-align:center;padding:4px">
+        <button class="btn xs" data-step="${k}" data-d="1">＋</button></div></div>`).join('')}
+  </div>
+
+  <h2 class="sec">연습 방식</h2>
+  <div class="card">
+    <label class="switch"><span>실전 모드<br><span class="tiny muted">질문을 귀로만 듣기 (글은 가려짐), 다시 듣기 1회</span></span><input type="checkbox" data-bind="settings.examMode" ${s.examMode ? 'checked' : ''}></label>
+    <label class="switch"><span>녹음 파일 보관<br><span class="tiny muted">최근 60개까지 답변 기록에서 다시 듣기</span></span><input type="checkbox" data-bind="settings.keepAudio" ${s.keepAudio ? 'checked' : ''}></label>
+    <label class="field"><span>영어 음성 (질문·예문 읽기)</span>
+      <select data-bind="settings.tts.voice">${voiceOptions()}</select></label>
+    <label class="field"><span>읽기 속도 <b id="rate-val">${s.tts.rate.toFixed(2)}x</b></span>
+      <input type="range" min="0.6" max="1.3" step="0.05" data-bind="settings.tts.rate" value="${s.tts.rate}" style="width:100%"></label>
+    <button class="btn sm soft" data-act="testvoice">${icon('volume')} 음성 들어보기</button>
+    ${voices.length ? '' : '<p class="tiny muted">영어 음성이 안 보이면 폰 설정 → 텍스트 음성 변환(TTS)에서 Google 음성 엔진의 영어(미국)를 설치해 주세요.</p>'}
+  </div>
+
+  <h2 class="sec">데이터</h2>
+  <div class="card">
+    <p class="small" style="margin-top:0">모든 기록은 이 폰 브라우저에만 있어요. 폰을 바꾸거나 브라우저 데이터를 지우기 전에 백업하세요.</p>
+    <div class="btn-row"><button class="btn sm" data-act="export">${icon('download')} 백업 파일 저장</button>
+      <button class="btn sm" data-act="import">${icon('upload')} 백업 불러오기</button></div>
+    <input type="file" id="import-file" accept="application/json,.json" class="hidden">
+    <details class="hint-box" style="margin-top:14px"><summary class="small">고급: AI 모델 순서</summary>
+      <p class="tiny muted">앞 모델이 바쁘거나 한도가 차면 다음 모델을 써요. 쉼표로 구분.</p>
+      <input type="text" data-models value="${esc(s.models.join(', '))}">
+      <button class="btn xs" data-act="resetmodels" style="margin-top:8px">기본값으로</button>
+    </details>
+    <button class="btn sm danger" data-act="reset" style="margin-top:14px">전체 초기화</button>
+  </div>
+
+  <h2 class="sec">앱으로 쓰기</h2>
+  <div class="card small">
+    ${isStandalone() ? '<p style="margin:0">✓ 홈 화면 앱으로 실행 중이에요.</p>' : `
+    <p style="margin-top:0"><b>갤럭시 (크롬)</b>: 오른쪽 위 ⋮ → <b>홈 화면에 추가</b> (또는 앱 설치)</p>
+    <p style="margin-bottom:0"><b>아이폰 (사파리)</b>: 아래 공유 버튼 → <b>홈 화면에 추가</b></p>`}
+    <p class="tiny muted" style="margin-bottom:0">오픽 데일리 · 단어장 원본: 내 OPIc 단어장(오픽노잼 정리)</p>
+  </div>`;
+}
+
+function setPath(path, value) {
+  const keys = path.split('.');
+  let o = state;
+  for (const k of keys.slice(0, -1)) o = o[k];
+  o[keys.at(-1)] = value;
+  save(keys[0]);
+}
+
+// 글자 입력은 칠 때마다 저장 (앱을 바로 닫아도 안전하게)
+function onInput(e) {
+  const t = e.target;
+  if (!t.dataset.bind || t.type === 'checkbox' || t.tagName === 'SELECT') return;
+  setPath(t.dataset.bind, t.type === 'range' ? +t.value : t.value);
+  if (t.type === 'range') $('#rate-val').textContent = `${(+t.value).toFixed(2)}x`;
+}
+
+function onChange(e) {
+  const t = e.target;
+  if (t.dataset.bind && (t.type === 'checkbox' || t.tagName === 'SELECT')) {
+    setPath(t.dataset.bind, t.type === 'checkbox' ? t.checked : t.value);
+  }
+  if (t.dataset.goal) {
+    const v = Math.max(+t.min, Math.min(+t.max, Math.round(+t.value || 0)));
+    state.settings.goals[t.dataset.goal] = v;
+    t.value = v;
+    save('settings');
+  }
+  if (t.dataset.models !== undefined) {
+    const list = t.value.split(',').map((x) => x.trim()).filter(Boolean);
+    state.settings.models = list.length ? list : [...DEFAULT_MODELS];
+    save('settings');
+    toast('모델 순서를 저장했어요');
+  }
+  if (t.id === 'import-file' && t.files[0]) {
+    t.files[0].text().then((txt) => {
+      try {
+        importJSON(txt);
+        toast('백업을 불러왔어요');
+        render();
+      } catch (err) {
+        toast(err.message);
+      }
+    });
+  }
+}
+
+async function onClick(e) {
+  const t = e.target.closest('button');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.survey) {
+    const list = state.profile.survey;
+    const i = list.indexOf(d.survey);
+    i >= 0 ? list.splice(i, 1) : list.push(d.survey);
+    save('profile');
+    t.classList.toggle('on', i < 0);
+    const sub = t.closest('.card').previousElementSibling.querySelector('.sub');
+    if (sub) sub.textContent = `${list.length}개 선택 · 12개 이상 권장`;
+    return;
+  }
+  if (d.step) {
+    const input = el.querySelector(`[data-goal="${d.step}"]`);
+    input.value = +input.value + +d.d;
+    return onChange({ target: input });
+  }
+  switch (d.act) {
+    case 'showkey': {
+      const k = $('#key');
+      k.type = k.type === 'password' ? 'text' : 'password';
+      return;
+    }
+    case 'savekey': {
+      state.settings.apiKey = $('#key').value.trim();
+      save('settings');
+      flush();
+      const msg = $('#key-msg');
+      if (!state.settings.apiKey) { msg.textContent = '키를 지웠어요.'; return; }
+      t.disabled = true;
+      msg.textContent = '테스트 중…';
+      try {
+        const model = await testKey();
+        msg.innerHTML = `<b style="color:var(--good)">✓ 연결 성공</b> (${esc(model)})`;
+      } catch (err) {
+        msg.innerHTML = `<b style="color:var(--bad)">✗ ${esc(friendlyError(err))}</b>`;
+      }
+      t.disabled = false;
+      return;
+    }
+    case 'testvoice': return tts.speak('Hi, I\'m Ava. Tell me about your favorite cafe. What do you usually do there?');
+    case 'export': {
+      const withKey = await confirmBox('백업에 API 키도 포함할까요? (다른 폰으로 옮길 때 편하지만, 파일 관리에 주의하세요)', '키 포함');
+      const blob = new Blob([exportJSON(withKey)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `opic-daily-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      return;
+    }
+    case 'import': return $('#import-file').click();
+    case 'resetmodels':
+      state.settings.models = [...DEFAULT_MODELS];
+      save('settings');
+      return render();
+    case 'reset':
+      if (!(await confirmBox('모든 기록·카드·설정을 지울까요? 되돌릴 수 없어요.', '전부 지우기', 'danger'))) return;
+      await resetAll();
+      location.replace(location.pathname);
+  }
+}
