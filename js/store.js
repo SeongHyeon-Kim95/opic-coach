@@ -31,6 +31,7 @@ const DEFAULTS = {
   cards: () => [],
   notes: () => [],
   history: () => [],
+  mocks: () => [],
   stats: () => ({ days: {} }),
 };
 export const state = {};
@@ -62,7 +63,7 @@ const kvGet = (k) => tx('kv', 'readonly', (s) => s.get(k));
 const kvSet = (k, v) => tx('kv', 'readwrite', (s) => s.put(v, k));
 export const audioPut = (id, blob) => tx('audio', 'readwrite', (s) => s.put(blob, id));
 export const audioGet = (id) => tx('audio', 'readonly', (s) => s.get(id));
-const audioDel = (id) => tx('audio', 'readwrite', (s) => s.delete(id));
+export const audioDel = (id) => tx('audio', 'readwrite', (s) => s.delete(id));
 
 export async function loadState() {
   for (const k of Object.keys(DEFAULTS)) {
@@ -145,6 +146,7 @@ export async function addHistory(entry, audioBlob) {
     await audioPut(entry.id, audioBlob).catch(() => { entry.audioId = null; });
   }
   state.history.unshift(entry);
+  state.history.sort((a, b) => b.ts - a.ts);
   const withAudio = state.history.filter((h) => h.audioId);
   for (const old of withAudio.slice(MAX_AUDIO)) {
     audioDel(old.audioId).catch(() => {});
@@ -154,7 +156,7 @@ export async function addHistory(entry, audioBlob) {
 }
 
 // ---------- 백업 ----------
-const BACKUP_KEYS = ['settings', 'profile', 'cards', 'notes', 'history', 'stats'];
+const BACKUP_KEYS = ['settings', 'profile', 'cards', 'notes', 'history', 'mocks', 'stats'];
 export function exportJSON(includeKey = false) {
   const out = { app: 'opic-daily', version: 1, exportedAt: new Date().toISOString() };
   for (const k of BACKUP_KEYS) out[k] = state[k];

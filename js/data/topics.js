@@ -133,7 +133,7 @@ export const SEED_TOPIC_LABELS = {
   home: '집', neighborhood: '동네', work: '직장', leisure: '여가(영화·음악·SNS)', hobby: '취미', exercise: '운동/건강',
   travel: '여행/출장', food: '음식/카페', weather: '날씨', money: '돈/경제', tech: '기술', shopping: '쇼핑',
   recycling: '재활용', sports_watch: '스포츠 관람', game: '게임', outdoor: '공원·해변·캠핑', social: '사교모임', pet: '반려동물',
-  show: '공연·전시', mine: '내가 추가한 표현',
+  show: '공연·전시', mine: '내 문장', mistakes: '내 실수 교정',
 };
 // 어떤 주제든 쓰이는 공통 표현 — 새 카드 우선순위 최상위
 export const CORE_SEED_TOPICS = ['starter', 'feeling', 'cat_desc', 'cat_habit', 'cat_past', 'cat_comp'];

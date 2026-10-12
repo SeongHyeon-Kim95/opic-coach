@@ -1,5 +1,5 @@
 import { state, dayStat, streak, isActive } from '../store.js';
-import { esc, icon, today, addDays, fmtDateKo } from '../util.js';
+import { esc, icon, today, addDays, fmtDateKo, daysBetween } from '../util.js';
 import { TOPICS } from '../data/topics.js';
 import { todayTopic } from '../plan.js';
 import { dueCards, newRemainingToday } from '../srs.js';
@@ -39,7 +39,7 @@ export function mount(el) {
     <span class="streak">${icon('fire')} ${days}일</span>
   </div>
 
-  ${setupNeeded.length ? `<a class="banner" href="#/settings" style="text-decoration:none">${icon('sparkle')}<div class="grow"><b>시작 전 1분 설정</b><br><span class="small">${setupNeeded.join(' · ')} — AI가 내 상황에 맞는 질문과 피드백을 만들어요.</span></div>${icon('chevron')}</a>` : ''}
+  ${setupNeeded.length ? `<a class="banner" href="#/welcome" style="text-decoration:none">${icon('sparkle')}<div class="grow"><b>시작 전 1분 설정</b><br><span class="small">${setupNeeded.join(' · ')} — AI가 내 상황에 맞는 질문과 피드백을 만들어요.</span></div>${icon('chevron')}</a>` : ''}
   ${installPrompt() ? `<button class="banner" data-act="install" style="width:100%;border:none;text-align:left;cursor:pointer">${icon('download')}<div class="grow"><b>홈 화면에 앱으로 설치</b><br><span class="small">아이콘 한 번으로 바로 열려요.</span></div></button>` : ''}
 
   <div class="card primary">
@@ -63,6 +63,14 @@ export function mount(el) {
   <a class="card link" href="#/notes">
     <span class="step-num">3</span>
     <div class="grow"><b>내 문장 정리</b><div class="small muted">피드백에서 저장한 문장 소리 내어 읽기 · ${state.notes.length}문장</div></div>
+    ${icon('chevron')}
+  </a>
+
+  <a class="card link" href="#/mock">
+    <span class="step-num" style="background:var(--accent-soft);color:var(--accent)">${icon('sparkle')}</span>
+    <div class="grow"><b>실전 모의고사</b><div class="small muted">${state.mocks[0]
+      ? `지난번 ${esc(state.mocks[0].grade || '—')} · ${daysBetween(state.mocks[0].date, t) === 0 ? '오늘' : `${daysBetween(state.mocks[0].date, t)}일 전`} · 주 1회 추천`
+      : '15문항 · 끝나면 바로 예상 등급 · 주 1회 추천'}</div></div>
     ${icon('chevron')}
   </a>
 

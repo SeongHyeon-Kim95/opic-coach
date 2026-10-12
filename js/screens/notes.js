@@ -2,9 +2,10 @@ import { state, save, newCard, audioGet } from '../store.js';
 import { $, esc, icon, toast, uid, today, modal, confirmBox, fmtDur } from '../util.js';
 import { TOPICS, CATEGORIES } from '../data/topics.js';
 import { practiceTopics } from '../plan.js';
-import { polishSentence, LEVELS } from '../prompts.js';
+import { polishSentence, LEVELS, AREAS } from '../prompts.js';
 import { friendlyError } from '../gemini.js';
-import { renderFeedback, bindFeedback } from '../feedback-view.js';
+import { renderFeedback, bindFeedback, areaBars } from '../feedback-view.js';
+import { openDrill } from '../drill.js';
 import * as tts from '../tts.js';
 
 let el;
@@ -46,8 +47,9 @@ function notesView() {
     ${topics.map((t) => `<button class="chip sm ${topicFilter === t ? 'on' : ''}" data-filter="${t}">${esc(TOPICS[t].ko)}</button>`).join('')}
   </div>
   <div class="row between" style="margin:8px 2px">
-    <span class="small muted">${list.length}문장 · 소리 내어 따라 읽기</span>
-    <button class="btn xs soft" data-act="play-all">${icon('play')} 모두 듣기</button>
+    <span class="small muted">${list.length}문장</span>
+    <div class="row" style="gap:6px"><button class="btn xs soft" data-act="drill">${icon('mic')} 가리고 말하기</button>
+    <button class="btn xs" data-act="play-all">${icon('play')} 모두 듣기</button></div>
   </div>
   <div class="card tight" id="note-list">
     ${list.map((n) => `<div class="list-item" data-note="${n.id}">
@@ -143,10 +145,52 @@ function trendChart(items) {
     </div></div>`;
 }
 
+const AREA_TIPS = {
+  task: '질문을 들을 때 토픽과 유형(묘사·습관·과거·비교)부터 잡고, 묻는 것에 먼저 답하세요.',
+  structure: 'MP(What·Feeling·Why)를 첫 25초 안에 → 예시 2개 → "So yeah..."로 마무리.',
+  accuracy: '과거경험은 과거형을 끝까지! 주어+동사를 빠뜨리지 않기. 실수 카드를 매일 복습하세요.',
+  vocab: '감정 표현·콜로케이션 카드를 매일 10장씩, "내 얘기 문장 만들기"까지 해 보세요.',
+  fluency: '짧은 문장 + 필러(you know, I mean)로 끊기지 않게. 업그레이드 답변 쉐도잉을 추천해요.',
+  pronunciation: '가리고 말하기에서 "AI 발음 체크"로 약한 소리를 반복 연습하세요.',
+};
+
+function avgScores(list) {
+  const out = {};
+  for (const [k] of AREAS) {
+    const vals = list.map((h) => h.feedback.scores?.[k]).filter((v) => v > 0);
+    out[k] = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+  }
+  return out;
+}
+
+function reportCard() {
+  const scored = state.history.filter((h) => h.feedback?.scores);
+  if (!scored.length) return '';
+  const recent = scored.slice(0, 10);
+  const avg = avgScores(recent);
+  const prev = scored.length > 10 ? avgScores(scored.slice(10, 20)) : null;
+  const weakest = AREAS.filter(([k]) => avg[k] > 0).sort((a, b) => avg[a[0]] - avg[b[0]])[0];
+  const counts = {};
+  for (const h of state.history.slice(0, 20)) for (const c of h.feedback?.corrections || []) if (c.type) counts[c.type] = (counts[c.type] || 0) + 1;
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const fixCards = state.cards.filter((c) => c.kind === 'fix').length;
+  const lastMock = state.mocks[0];
+  return `<div class="card" style="margin-bottom:12px">
+    <div class="row between"><b>성장 리포트</b><span class="tiny muted">최근 ${recent.length}개 답변 평균</span></div>
+    <div style="margin-top:10px">${areaBars(avg)}</div>
+    ${prev ? `<p class="tiny muted" style="margin:6px 0 0">이전 10개 대비: ${AREAS.filter(([k]) => avg[k] && prev[k]).map(([k, l]) => { const d = avg[k] - prev[k]; return `${l.split(' ')[0]} ${d > 0 ? '▲' + d : d < 0 ? '▼' + -d : '–'}`; }).join(' · ')}</p>` : ''}
+    ${weakest ? `<div class="banner small" style="margin:12px 0 0">${icon('bulb')}<div><b>가장 약한 영역: ${esc(weakest[1])}</b><br>${esc(AREA_TIPS[weakest[0]])}</div></div>` : ''}
+    ${top.length ? `<div class="eyebrow" style="margin-top:14px">자주 하는 실수 (최근 20개 답변)</div>
+      <div class="chips" style="margin-top:8px">${top.map(([t, n]) => `<span class="tag">${esc(t)} ${n}</span>`).join('')}</div>
+      ${fixCards ? `<a class="btn sm soft block" href="#/review/topic/mistakes" style="margin-top:10px">${icon('cards')} 내 실수 카드 복습 (${fixCards}장)</a>` : '<p class="tiny muted" style="margin-bottom:0">피드백의 "모두 복습 카드로"를 누르면 실수가 카드로 쌓여요.</p>'}` : ''}
+    ${lastMock ? `<a class="list-item" href="#/mock" style="margin-top:10px;text-decoration:none;color:inherit;align-items:center"><span class="lv" data-lv="${esc(lastMock.grade)}">${esc(lastMock.grade || '—')}</span><div class="grow small">최근 모의고사 · ${esc(lastMock.date)}</div>${icon('chevron')}</a>` : ''}
+  </div>`;
+}
+
 function historyView() {
   if (!state.history.length) return '<div class="empty">아직 기록이 없어요.<br><a href="#/speak">말하기 연습</a>을 하면 여기에 쌓여요.</div>';
   const withLv = state.history.filter((h) => h.feedback?.level).slice(0, 20).reverse();
-  return `${trendChart(withLv)}
+  return `${reportCard()}${trendChart(withLv)}
   <div class="card tight">
     ${state.history.map((h) => `<div class="list-item" data-hist="${h.id}" style="cursor:pointer">
       <span class="lv" data-lv="${esc(h.feedback?.level || '')}">${esc(h.feedback?.level || '—')}</span>
@@ -216,6 +260,10 @@ async function onClick(e) {
     return render();
   }
   if (d.act === 'add') return openAddModal();
+  if (d.act === 'drill') {
+    const list = state.notes.filter((n) => !topicFilter || n.topicId === topicFilter);
+    return openDrill(list, { title: '가리고 말하기 · 내 문장' });
+  }
   if (d.act === 'play-all') {
     const rows = [...el.querySelectorAll('#note-list .list-item')];
     const ids = rows.map((r) => r.dataset.note);

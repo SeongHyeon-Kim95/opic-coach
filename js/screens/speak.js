@@ -4,11 +4,11 @@ import { TOPICS, CATEGORIES, MODES, COMBO_PATTERNS, SURPRISE_TOPICS } from '../d
 import { todayTopic, randomSurprise, practiceTopics, recentQuestions, offlineQuestions } from '../plan.js';
 import { generateQuestions, evaluateAnswer } from '../prompts.js';
 import { friendlyError } from '../gemini.js';
-import { Recorder, canRecord, toWav16k, blobToBase64 } from '../audio.js';
-import * as tts from '../tts.js';
+import { canRecord, audioForAI } from '../audio.js';
+import * as voice from '../aivoice.js';
 import { renderFeedback, bindFeedback } from '../feedback-view.js';
+import { zone, ZONE_MSG, recordingHTML, startRecording, micErrorMessage } from '../recui.js';
 
-const MAX_SEC = 180;
 const SINGLE_CATS = ['random', 'desc', 'habit', 'past', 'comp', 'rp11', 'rp12', 'rp13', 'ihu14', 'ihu15', 'intro'];
 const TIPS = [
   'MP = What + Feeling + Why. 첫 25초 안에!',
@@ -25,6 +25,7 @@ const setup = { mode: 'combo', topicId: '', category: 'random' };
 let el;
 let timers = [];
 let rec = null;
+let stopUi = null;
 let unbindFb = null;
 
 export function mount(root, params) {
@@ -43,10 +44,11 @@ export function mount(root, params) {
 
 function cleanup() {
   clearTimers();
-  tts.stop();
+  voice.stopAll();
   unbindFb?.();
   unbindFb = null;
   if (S?.phase === 'recording') {
+    stopUi?.();
     rec?.cancel();
     S.phase = 'question';
   }
@@ -56,13 +58,6 @@ function cleanup() {
 const clearTimers = () => { timers.forEach(clearInterval); timers = []; };
 const cur = () => S.items[S.idx];
 const hasKey = () => !!state.settings.apiKey;
-const zone = (t) => (t < 50 ? 'short' : t <= 100 ? 'good' : t <= 120 ? 'long' : 'over');
-const ZONE_MSG = {
-  short: '조금 짧아요. IH는 1분~1분 30초(약 10문장)가 적당해요.',
-  good: '좋은 길이예요!',
-  long: '살짝 길어요. MP 위주로 다듬으면 더 좋아요.',
-  over: '2분이 넘으면 감점될 수 있어요. 핵심만 남겨 보세요.',
-};
 
 function render() {
   clearTimers();
@@ -87,6 +82,13 @@ function renderSetup() {
   <button class="card primary link" data-act="today" style="width:100%;text-align:left;font:inherit">
     ${icon('mic')}<div class="grow"><b>오늘의 콤보 바로 시작</b><div class="small muted">${esc(todays.ko)} · 3문항 · 실전 순서</div></div>${icon('chevron')}
   </button>
+
+  <div class="row" style="gap:10px;margin-top:12px">
+    <a class="card link grow" href="#/mock/full" style="margin:0;padding:14px">
+      <div class="grow"><b>실전 모의고사</b><div class="small muted">15문항 · 약 30분</div></div>${icon('chevron')}</a>
+    <a class="card link grow" href="#/mock/mini" style="margin:0;padding:14px">
+      <div class="grow"><b>미니 모의고사</b><div class="small muted">7문항 · 약 12분</div></div>${icon('chevron')}</a>
+  </div>
 
   <h2 class="sec">연습 방식</h2>
   <div class="chips">${Object.entries(MODES).map(([k, m]) => `<button class="chip ${setup.mode === k ? 'on' : ''}" data-mode="${k}">${m.ko}</button>`).join('')}</div>
@@ -122,12 +124,21 @@ async function start({ mode, topicId, category = 'random' }) {
       onModel: (m) => { my.model = m; const l = $('#model-line'); if (l) l.textContent = `AI 모델: ${m}`; },
     });
     my.items = questions.map((q) => ({ question: q }));
+    prefetchVoices(my);
   } catch (e) {
     my.items = offlineQuestions(topicId, cats).map((q) => ({ question: q }));
     my.notice = e.code === 'NO_KEY' ? 'API 키가 없어 기본 질문으로 진행해요. 녹음 후 스스로 체크해 보세요.' : `AI 질문 생성 실패 → 기본 질문으로 진행해요. (${friendlyError(e)})`;
   }
   if (S !== my) return;
   enterQuestion();
+}
+
+/** 첫 질문 음성부터 차례로 미리 만들어 둔다 (요청이 몰리지 않게 순서대로) */
+async function prefetchVoices(set) {
+  for (const it of set.items) {
+    if (S !== set) return;
+    await voice.synthesize(it.question.q);
+  }
 }
 
 function enterQuestion(retry = false) {
@@ -202,59 +213,38 @@ function listen() {
   const q = cur().question;
   S.played++;
   if (S.phase === 'question') renderQuestion();
-  $('#ava')?.classList.add('talking');
-  tts.speak(q.q, { onEnd: () => $('#ava')?.classList.remove('talking') });
+  const ava = $('#ava');
+  ava?.classList.add('talking');
+  voice.say(q.q, { onEnd: () => $('#ava')?.classList.remove('talking') });
 }
 
 // ---------------- 녹음 ----------------
 async function startRec() {
-  tts.stop();
-  rec = new Recorder();
+  voice.stopAll();
   S.phase = 'recording';
   S.error = '';
   render();
-  const bars = [...el.querySelectorAll('.meter i')];
   try {
-    await rec.start((lv) => bars.forEach((b, i) => {
-      b.style.height = `${6 + lv * 30 * (0.55 + 0.45 * Math.abs(Math.sin(i * 1.7 + performance.now() / 160)))}px`;
-    }));
+    ({ rec, stopUi } = await startRecording(el, { onLimit: stopRec }));
   } catch (e) {
-    rec.cleanup();
     if (S?.phase !== 'recording') return;
     S.phase = 'question';
-    S.error = e.name === 'NotAllowedError' ? '마이크 권한이 필요해요. 브라우저(사이트) 설정에서 마이크를 허용해 주세요.' : `녹음을 시작할 수 없어요: ${e.message}`;
+    S.error = micErrorMessage(e);
     return render();
   }
-  if (S?.phase !== 'recording') return rec.cancel();
-  const timerEl = $('#timer');
-  const fill = $('.zone-bar .fill');
-  timers.push(setInterval(() => {
-    const t = rec.elapsed();
-    timerEl.textContent = fmtDur(t);
-    timerEl.dataset.zone = zone(t);
-    fill.style.width = `${Math.min(100, (t / MAX_SEC) * 100)}%`;
-    if (t >= MAX_SEC) stopRec();
-  }, 200));
+  if (S?.phase !== 'recording') { stopUi(); rec.cancel(); }
 }
 
 function renderRecording() {
   const q = cur().question;
   el.innerHTML = `${topBar()}
   ${S.showText ? `<div class="card tight"><div class="small en">${esc(q.q)}</div></div>` : ''}
-  <div class="rec-wrap" style="margin-top:34px">
-    <div class="eyebrow" style="color:var(--accent)">● 녹음 중</div>
-    <div class="timer" id="timer" data-zone="short">0:00</div>
-    <div class="zone-bar"><div class="zone"></div><div class="fill"></div></div>
-    <div class="zone-legend"><span>0:00</span><span style="margin-left:18%">1:00~1:30 목표</span><span>3:00</span></div>
-    <div class="meter">${'<i></i>'.repeat(14)}</div>
-    <button class="rec-btn stop" data-act="stop" aria-label="녹음 끝내기">${icon('stop')}</button>
-    <div class="small muted">다 말했으면 눌러서 끝내기</div>
-  </div>
+  ${recordingHTML()}
   <button class="btn ghost block" data-act="cancelrec">취소</button>`;
 }
 
 async function stopRec() {
-  clearTimers();
+  stopUi?.();
   if (S?.phase !== 'recording') return;
   S.phase = 'stopping';
   const { blob, duration } = await rec.stop();
@@ -322,15 +312,7 @@ async function evaluate() {
   S.error = '';
   render();
   try {
-    let audio = null;
-    if (it.answer.type === 'audio') {
-      try {
-        const wav = await toWav16k(it.answer.blob);
-        audio = { mimeType: 'audio/wav', data: await blobToBase64(wav.blob) };
-      } catch {
-        audio = { mimeType: it.answer.blob.type.split(';')[0] || 'audio/webm', data: await blobToBase64(it.answer.blob) };
-      }
-    }
+    const audio = it.answer.type === 'audio' ? await audioForAI(it.answer.blob) : null;
     const fb = await evaluateAnswer({
       question: it.question, audio, text: it.answer.text, durationSec: it.answer.duration,
       onModel: (m) => { const l = $('#model-line'); if (l) l.textContent = `AI 모델: ${m}`; },
@@ -370,7 +352,7 @@ function renderFeedbackView() {
 }
 
 function next() {
-  tts.stop();
+  voice.stopAll();
   if (S.idx >= S.items.length - 1) {
     S.phase = 'done';
     render();
@@ -397,7 +379,7 @@ function renderDone() {
 // ---------------- 이벤트 ----------------
 async function onClick(e) {
   const say = e.target.closest('[data-say]');
-  if (say) return tts.speak(say.dataset.say);
+  if (say) return voice.say(say.dataset.say, { cachedOnly: true });
   const b = e.target.closest('button');
   if (!b) return;
   const d = b.dataset;
@@ -414,7 +396,7 @@ async function onClick(e) {
       const unsaved = ['recording', 'recorded', 'typing', 'evaluating'].includes(S.phase);
       if (unsaved && !(await confirmBox('지금 답변은 저장되지 않아요. 그만할까요?', '그만하기', 'danger'))) return;
       rec?.cancel();
-      tts.stop();
+      voice.stopAll();
       S = null;
       return render();
     }
@@ -422,9 +404,9 @@ async function onClick(e) {
     case 'showtext': S.showText = true; return renderQuestion();
     case 'rec': return startRec();
     case 'stop': return stopRec();
-    case 'cancelrec': rec?.cancel(); S.phase = 'question'; return render();
+    case 'cancelrec': stopUi?.(); rec?.cancel(); S.phase = 'question'; return render();
     case 'rerec': return startRec();
-    case 'type': tts.stop(); S.phase = 'typing'; S.error = ''; return render();
+    case 'type': voice.stopAll(); S.phase = 'typing'; S.error = ''; return render();
     case 'back': S.phase = 'question'; S.error = ''; return render();
     case 'eval': return evaluate();
     case 'evaltext': {

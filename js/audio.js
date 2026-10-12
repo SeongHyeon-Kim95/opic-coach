@@ -96,3 +96,15 @@ export function blobToBase64(blob) {
     r.readAsDataURL(blob);
   });
 }
+
+/** Gemini 로 보낼 오디오: 크롬(webm/ogg)은 그대로(용량 작음), 그 외(아이폰 mp4 등)는 WAV 로 변환 */
+export async function audioForAI(blob) {
+  const type = (blob.type || '').split(';')[0];
+  if (/webm|ogg/.test(type)) return { mimeType: type, data: await blobToBase64(blob) };
+  try {
+    const wav = await toWav16k(blob);
+    return { mimeType: 'audio/wav', data: await blobToBase64(wav.blob) };
+  } catch {
+    return { mimeType: type || 'audio/mp4', data: await blobToBase64(blob) };
+  }
+}

@@ -57,7 +57,13 @@ export function toast(msg, ms = 2200) {
  * 하단 시트 모달. actions: [{label, kind, onClick(close) → false 반환 시 닫지 않음}]
  * 반환값: close 함수
  */
-export function modal({ title = '', body = '', actions = [], onMount } = {}) {
+const openModals = new Set();
+/** 화면 이동 시 열린 팝업을 모두 닫는다 (녹음·음성 정리 포함) */
+export function closeAllModals() {
+  [...openModals].forEach((close) => close());
+}
+
+export function modal({ title = '', body = '', actions = [], onMount, onClose } = {}) {
   const root = $('#modal-root');
   const back = document.createElement('div');
   back.className = 'modal-back';
@@ -66,7 +72,12 @@ export function modal({ title = '', body = '', actions = [], onMount } = {}) {
     <div class="modal-body">${body}</div>
     ${actions.length ? `<div class="btn-row">${actions.map((a, i) => `<button class="btn ${a.kind || ''}" data-i="${i}">${esc(a.label)}</button>`).join('')}</div>` : ''}
   </div>`;
-  const close = () => back.remove();
+  const close = () => {
+    if (!openModals.delete(close)) return;
+    back.remove();
+    onClose?.();
+  };
+  openModals.add(close);
   back.addEventListener('click', async (e) => {
     if (e.target === back) return close();
     const b = e.target.closest('.btn-row > [data-i]');
@@ -115,6 +126,7 @@ const ICONS = {
   list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
+  clipboard: '<rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 export const icon = (name, extra = '') => `<svg viewBox="0 0 24 24" ${extra}>${ICONS[name] || ''}</svg>`;

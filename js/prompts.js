@@ -107,17 +107,29 @@ Hint for each question (shown only if the learner asks):
 export const LEVELS = ['NH', 'IL', 'IM1', 'IM2', 'IM3', 'IH', 'AL'];
 const CHECK_LABELS = ['질문 의도에 맞는 답', '구조 (시작·MP·디테일·마무리)', '시제 일관성', '필러·연결어', '감정 표현', '자연스러움 (스크립트 티 X)', '분량·시간'];
 
+// 영역 점수 (오픽업·오픽이지의 영역별 평가를 참고)
+export const AREAS = [
+  ['task', '질문 이해·과제'],
+  ['structure', '구성 (MP·전개)'],
+  ['accuracy', '문법 정확성'],
+  ['vocab', '어휘·표현'],
+  ['fluency', '유창성'],
+  ['pronunciation', '발음·억양'],
+];
+export const MISTAKE_TYPES = ['시제', '동사 형태', '주어·be동사 빠짐', '관사', '전치사', '단수·복수', '-ed/-ing 감정', '어순', '단어 선택', '콩글리시', '어색한 표현', '기타'];
+
 const EVAL_SCHEMA = obj({
   transcript: S,
   level: enumS(LEVELS),
   level_reason_ko: S,
   summary_ko: S,
+  scores: obj(Object.fromEntries(AREAS.map(([k]) => [k, I]))),
   mp: obj({ what: B, feeling: B, why: B, found_en: S, comment_ko: S }),
   checks: arr(obj({ label_ko: S, ok: B, comment_ko: S })),
   sentence_count: I,
   strengths_ko: arr(S),
   improvements_ko: arr(S),
-  corrections: arr(obj({ original: S, corrected: S, reason_ko: S })),
+  corrections: arr(obj({ original: S, corrected: S, reason_ko: S, type: enumS(MISTAKE_TYPES) })),
   pronunciation: arr(obj({ word: S, tip_ko: S })),
   upgraded: arr(EN_KO),
   expressions: arr(obj({ en: S, ko: S, example_en: S, example_ko: S })),
@@ -139,17 +151,18 @@ Do this:
 1. transcript: ${isAudio ? 'transcribe the audio VERBATIM. Keep fillers (um, uh, like), repetitions, false starts and every grammar mistake exactly as spoken. Do NOT fix anything.' : 'copy the text as is.'}
 2. Judge with ACTFL/OPIc criteria (Function, Accuracy, Content/Context, Text type) and the 오픽노잼 structure for this question type. Be honest and realistic, not flattering. Description/habit answers cannot be above IH.
 3. level: realistic estimate for THIS answer. level_reason_ko: why, in 1–2 sentences. summary_ko: one-line overall comment.
+   scores: 1–10 for each area — task (understood the question and did the task), structure (MP, logical flow, conclusion), accuracy (grammar), vocab (range and naturalness of words/expressions), fluency (speed, smoothness, pauses, natural fillers), pronunciation (clarity, stress, intonation). Calibrate: 5 ≈ IM2, 7 ≈ IH, 9 ≈ AL. ${isAudio ? '' : 'No audio: give 0 for fluency and pronunciation.'}
 4. mp: did the answer state What / Feeling / Why early? found_en = the learner's MP sentence(s) quoted (empty if none). comment_ko = how to make the MP clearer. For role-play questions read it as What = clear situation/purpose, Feeling = natural reactions (RRF), Why = reason for calling/asking.
 5. checks: exactly these ${CHECK_LABELS.length} items in this order: ${CHECK_LABELS.join(' / ')}. ok=true only if it is good enough for ${state.profile.target}. comment_ko: one short concrete sentence.
 6. sentence_count: number of sentences spoken.
 7. strengths_ko: 1–3 items. improvements_ko: the 2–3 most important fixes to reach ${state.profile.target}, concrete and actionable.
-8. corrections: up to 8 of the most important errors (grammar, wrong word, Konglish, unnatural phrasing). original = exact fragment from the transcript, corrected = natural version, reason_ko = short reason.
+8. corrections: up to 8 of the most important errors (grammar, wrong word, Konglish, unnatural phrasing). original = exact fragment from the transcript, corrected = natural version, reason_ko = short reason, type = the closest mistake category.
 9. pronunciation: ${isAudio ? 'up to 5 words that were unclear or had Korean-style pronunciation, with a Korean tip. Empty array if pronunciation was fine.' : 'empty array.'}
 10. upgraded: rewrite the answer at ${state.profile.target} level. KEEP the learner's own story, facts and MP — fix and enrich it, do not swap in a different story. 9–11 short spoken sentences, 오픽노잼 structure for this type, easy words, 2–3 natural fillers, consistent tense, none of the AVOID items. One sentence per item with Korean translation.
 11. expressions: 3–5 expressions from the upgraded answer that are worth memorizing (with a new example sentence and Korean).
 12. next_tip_ko: ONE specific thing to try in the next attempt.`;
   const parts = isAudio ? [{ inlineData: audio }, { text: prompt }] : [{ text: prompt }];
-  const { data, model } = await generate({ system: systemPrompt(), parts, schema: EVAL_SCHEMA, thinking: 'low', temperature: 0.4, timeoutMs: 120000, onModel });
+  const { data, model } = await generate({ system: systemPrompt(), parts, schema: EVAL_SCHEMA, thinking: 'low', temperature: 0.2, timeoutMs: 120000, onModel });
   return { ...data, model };
 }
 
@@ -174,5 +187,93 @@ export async function polishSentence({ input, onModel }) {
 """${input}"""
 Give the most natural spoken English version that the learner can say easily (keep the meaning; fix grammar), its Korean meaning, 2 alternative ways to say it, and note_ko: what changed or a usage tip in 1–2 short sentences.`;
   const { data } = await generate({ system: systemPrompt(), parts: [{ text }], schema: POLISH_SCHEMA, thinking: 'low', temperature: 0.5, onModel });
+  return data;
+}
+
+// ---------- 5) 모의고사 문제 한 번에 만들기 ----------
+const MOCK_SCHEMA = obj({ sets: arr(obj({ questions: arr(obj({ q: S, ko: S })) })) });
+
+export async function generateMockTest({ sets, recent = [], onModel }) {
+  const plan = sets.map((st, i) => {
+    const t = TOPICS[st.topicId];
+    return `Set ${i + 1}: topic "${t.en}" (${t.kind === 'surprise' ? 'unexpected topic' : 'survey topic'}) — ${st.categories.map((c) => CATEGORIES[c].en).join(' → ')}`;
+  }).join('\n');
+  const text = `Create a full OPIc mock test (difficulty 6-6) in this exact plan:
+${plan}
+
+Rules:
+- Authentic OPIc wording as the interviewer "Ava" says it, 2–4 sentences each, with the usual sub-questions.
+- Questions inside a set continue the same topic like a real combo set. Role-play sets keep the same situation for 11→12→13.
+- Self-introduction is exactly: "Let's start the interview now. Tell me a little bit about yourself."
+- Fit the learner's life. Avoid repeating these recent questions:
+${recent.slice(0, 20).map((q) => `  - ${q}`).join('\n') || '  (none)'}
+- ko: faithful Korean translation.
+Return sets in the same order with the same number of questions.`;
+  const { data } = await generate({ system: systemPrompt(), parts: [{ text }], schema: MOCK_SCHEMA, thinking: 'low', temperature: 1, timeoutMs: 90000, onModel });
+  return sets.map((st, i) => st.categories.map((c, k) => {
+    const q = data.sets?.[i]?.questions?.[k];
+    return q ? { q: q.q, ko: q.ko, category: c, topicId: st.topicId } : null;
+  }));
+}
+
+// ---------- 6) 모의고사 종합 평가 ----------
+const MOCK_SUMMARY_SCHEMA = obj({
+  grade: enumS(LEVELS),
+  grade_reason_ko: S,
+  scores: obj(Object.fromEntries(AREAS.map(([k]) => [k, I]))),
+  strengths_ko: arr(S),
+  weaknesses_ko: arr(S),
+  plan_ko: arr(S),
+  one_line_ko: S,
+});
+
+export async function summarizeMock({ items, onModel }) {
+  const lines = items.map((it, i) => {
+    const head = `Q${i + 1} [${CATEGORIES[it.question.category].en}] ${it.question.q}`;
+    if (it.skipped || !it.feedback) return `${head}\n  → ${it.skipped ? 'SKIPPED by the learner' : 'not evaluated'}`;
+    const f = it.feedback;
+    return `${head}\n  → length ${Math.round(it.durationSec || 0)}s, item level ${f.level}, scores ${JSON.stringify(f.scores)}\n  → transcript: ${f.transcript}`;
+  }).join('\n\n');
+  const text = `This is a full OPIc mock test result. Give ONE final grade like a real ACTFL rater would: holistic, based on the whole sample, not an average.
+Remember: Q1 (self-introduction) is not rated. Up to 5 skips can still get AL; 6+ skips make AL impossible. AL needs consistently strong past-experience/comparison answers with paragraph-length, well-connected speech. Description/habit-only strength caps at IH.
+
+${lines}
+
+Return:
+- grade + grade_reason_ko (2–3 sentences, concrete)
+- scores: 1–10 per area for the whole test (5 ≈ IM2, 7 ≈ IH, 9 ≈ AL)
+- strengths_ko (2–3), weaknesses_ko (2–3, the patterns that cost the most points)
+- plan_ko: exactly 3 concrete actions for the next week to reach ${state.profile.target}, using the 오픽노잼 method
+- one_line_ko: one encouraging, honest sentence`;
+  const { data } = await generate({ system: systemPrompt(), parts: [{ text }], schema: MOCK_SUMMARY_SCHEMA, thinking: 'low', temperature: 0.3, timeoutMs: 90000, onModel });
+  return data;
+}
+
+// ---------- 7) 문장 따라 말하기 발음 체크 ----------
+const PRON_SCHEMA = obj({ transcript: S, score: I, words: arr(obj({ word: S, tip_ko: S })), comment_ko: S });
+
+export async function checkPronunciation({ target, audio, onModel }) {
+  const text = `The learner tried to say this sentence out loud:
+"${target}"
+Listen to the attached recording.
+- transcript: what they actually said (verbatim).
+- score: 0–100 for how clearly and accurately they said the target sentence (missing words, pronunciation, stress, rhythm). 85+ = clear and natural.
+- words: up to 4 words that need work, with a short Korean tip (e.g. stress, th/r/l/v/f sounds, final consonants, linking). Empty if fine.
+- comment_ko: one short Korean sentence of advice.`;
+  const { data } = await generate({ system: systemPrompt(), parts: [{ inlineData: audio }, { text }], schema: PRON_SCHEMA, thinking: 'low', temperature: 0.2, timeoutMs: 45000, onModel });
+  return data;
+}
+
+// ---------- 8) 표현으로 만든 내 문장 확인 ----------
+const MINE_SCHEMA = obj({ ok: B, corrected: S, ko: S, comment_ko: S });
+
+export async function checkMySentence({ expression, sentence, onModel }) {
+  const text = `The learner practiced the expression "${expression}" by making their own sentence:
+"""${sentence}"""
+- ok: true if it is natural and uses the expression correctly (small typos are fine).
+- corrected: the most natural spoken version that keeps their meaning and uses the expression (same as input if already good).
+- ko: Korean meaning of corrected.
+- comment_ko: one short Korean sentence — praise what is good or explain the fix.`;
+  const { data } = await generate({ system: systemPrompt(), parts: [{ text }], schema: MINE_SCHEMA, thinking: 'low', temperature: 0.3, onModel });
   return data;
 }

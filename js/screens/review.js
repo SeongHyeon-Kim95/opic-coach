@@ -1,11 +1,11 @@
 import { state, save, newCard } from '../store.js';
-import { $, esc, icon, toast, confirmBox } from '../util.js';
+import { $, esc, icon, toast, confirmBox, modal, uid, today } from '../util.js';
 import { TOPICS, SEED_TOPIC_LABELS } from '../data/topics.js';
 import { buildSession, deckStats, newRemainingToday, GRADES, nextInterval, intervalLabel, grade } from '../srs.js';
 import { practiceTopics } from '../plan.js';
-import { generateExpressions } from '../prompts.js';
+import { generateExpressions, checkMySentence } from '../prompts.js';
 import { friendlyError } from '../gemini.js';
-import * as tts from '../tts.js';
+import * as voice from '../aivoice.js';
 
 let el;
 let R = null; // 진행 중인 복습 { queue, idx, revealed, count, finished }
@@ -28,9 +28,14 @@ export function mount(root, params) {
     history.replaceState(null, '', '#/review');
     if (!R) startSession({});
   }
+  if (params[0] === 'topic' && params[1]) {
+    history.replaceState(null, '', '#/review');
+    R = null;
+    startSession({ topic: params[1] });
+  }
   render();
   return () => {
-    tts.stop();
+    voice.stopAll();
     document.body.classList.remove('focus-mode');
   };
 }
@@ -134,16 +139,27 @@ function foundList(found) {
 }
 
 // ---------------- 카드 ----------------
+function fixFaces(c) {
+  return {
+    front: `<div class="hint"><span class="tag accent">내 실수 고쳐 말하기</span></div>
+      <div class="hint">내가 이렇게 말했어요</div><div class="fix-wrong en">${esc(c.wrong)}</div>
+      <div class="hint">자연스럽게 고쳐서 소리 내어 말해 보세요</div>`,
+    back: `<hr><div class="answer en">${esc(c.en)}</div><div class="ex">${esc(c.ko)}</div>
+      <button class="btn xs soft" data-say="${esc(c.en)}">${icon('volume')} 듣기</button>`,
+  };
+}
+
 function renderCard() {
   const c = R.queue[R.idx];
   const ko2en = state.settings.cardDir === 'ko2en';
-  const front = ko2en
+  const fix = c.kind === 'fix' ? fixFaces(c) : null;
+  const front = fix ? fix.front : ko2en
     ? `<div class="hint">${c.state === 'new' ? '<span class="tag accent">새 표현</span>' : ''}</div>
        <div class="front">${esc(c.ko)}</div>${c.exKo ? `<div class="hint">${esc(c.exKo)}</div>` : ''}`
     : `<div class="hint">${c.state === 'new' ? '<span class="tag accent">새 표현</span>' : ''}</div>
        <div class="front en">${esc(c.en)}</div>${c.ex ? `<div class="hint en">${esc(c.ex)}</div>` : ''}
        <button class="btn xs soft" data-say="${esc(c.en)}">${icon('volume')} 듣기</button>`;
-  const back = ko2en
+  const back = fix ? fix.back : ko2en
     ? `<hr><div class="answer en">${esc(c.en)}</div>${c.ex ? `<div class="ex en">${esc(c.ex)}</div>` : ''}
        <div class="row" style="justify-content:center"><button class="btn xs soft" data-say="${esc(c.en)}">${icon('volume')} 표현</button>
        ${c.ex ? `<button class="btn xs soft" data-say="${esc(c.ex)}">${icon('volume')} 예문</button>` : ''}</div>`
@@ -157,7 +173,8 @@ function renderCard() {
   <div class="bar" style="margin-bottom:14px"><i style="width:${Math.round((R.idx / R.queue.length) * 100)}%"></i></div>
   <div class="card fc" data-act="flip">${front}${R.revealed ? back : ''}</div>
   ${R.revealed
-    ? `<div class="grades">${GRADES.map((g) => `<button class="btn ${g.cls}" data-grade="${g.key}">${g.label}<small>${intervalLabel(nextInterval(c, g.key))}</small></button>`).join('')}</div>`
+    ? `<div class="grades">${GRADES.map((g) => `<button class="btn ${g.cls}" data-grade="${g.key}">${g.label}<small>${intervalLabel(nextInterval(c, g.key))}</small></button>`).join('')}</div>
+       ${c.kind === 'vocab' ? `<button class="btn ghost block sm" data-act="mine" style="margin-top:8px">${icon('edit')} 이 표현으로 내 얘기 한 문장 만들기</button>` : ''}`
     : `<button class="btn primary block" data-act="flip" style="margin-top:14px">정답 보기</button>
        <p class="tiny muted center">${ko2en ? '먼저 소리 내어 영어로 말해 본 뒤 확인하세요' : '뜻을 떠올려 본 뒤 확인하세요'}</p>`}`;
 }
@@ -167,7 +184,45 @@ function flip() {
   R.revealed = true;
   renderCard();
   const c = R.queue[R.idx];
-  if (state.settings.cardDir === 'ko2en') tts.speak(c.en);
+  if (state.settings.cardDir === 'ko2en' || c.kind === 'fix') voice.say(c.en, { cachedOnly: true });
+}
+
+/** 단어장 공부법 2단계 "내 문장으로 바꾸기" — 표현을 내 얘기로 써 보고 AI가 확인 */
+function openMine(c) {
+  const keyless = !state.settings.apiKey;
+  let result = null;
+  modal({
+    title: '내 얘기로 문장 만들기',
+    body: `<div class="card tight soft"><b class="en">${esc(c.en)}</b> <span class="ko">${esc(c.ko)}</span>${c.ex ? `<div class="small muted" style="margin-top:4px">예) ${esc(c.ex)}</div>` : ''}</div>
+      <label class="field"><span>이 표현을 넣어 내 얘기 한 문장 (영어 · 음성 입력 가능)</span>
+        <textarea id="mine-in" rows="3" placeholder="예문을 그대로 쓰지 말고 진짜 내 상황으로!"></textarea></label>
+      <div id="mine-res" style="margin-top:10px"></div>`,
+    actions: [
+      { label: '닫기' },
+      ...(keyless ? [] : [{ label: 'AI 확인', kind: 'soft', onClick: async (close, back) => {
+        const sentence = $('#mine-in', back).value.trim();
+        if (!sentence) { toast('문장을 먼저 써 주세요'); return false; }
+        const box = $('#mine-res', back);
+        box.innerHTML = '<p class="small muted">확인 중…</p>';
+        try {
+          result = await checkMySentence({ expression: c.en, sentence });
+          box.innerHTML = `<div class="card tight"><div class="small" style="color:var(${result.ok ? '--good' : '--warn'});font-weight:700">${result.ok ? '👍 자연스러워요' : '✏️ 이렇게 고쳐 보세요'}</div>
+            <div class="en" style="font-weight:700;margin-top:4px">${esc(result.corrected)}</div><div class="ko">${esc(result.ko)}</div>
+            <p class="small" style="margin-bottom:0">${esc(result.comment_ko)}</p></div>`;
+        } catch (err) {
+          box.innerHTML = `<p class="small" style="color:var(--bad)">${esc(friendlyError(err))}</p>`;
+        }
+        return false;
+      } }]),
+      { label: '노트에 저장', kind: 'primary', onClick: (close, back) => {
+        const en = result?.corrected || $('#mine-in', back).value.trim();
+        if (!en) { toast('문장을 먼저 써 주세요'); return false; }
+        state.notes.unshift({ id: uid(), en, ko: result?.ko || '', topicId: '', src: 'mine', created: today() });
+        save('notes');
+        toast('노트에 저장했어요');
+      } },
+    ],
+  });
 }
 
 function answer(g) {
@@ -178,7 +233,7 @@ function answer(g) {
   R.idx++;
   R.revealed = false;
   if (R.idx >= R.queue.length) R.finished = true;
-  tts.stop();
+  voice.stopAll();
   render();
 }
 
@@ -195,7 +250,7 @@ function renderFinished() {
 // ---------------- 이벤트 ----------------
 async function onClick(e) {
   const say = e.target.closest('[data-say]');
-  if (say) { e.stopPropagation(); return tts.speak(say.dataset.say); }
+  if (say) { e.stopPropagation(); return voice.say(say.dataset.say, { cachedOnly: true }); }
   const t = e.target.closest('[data-act],[data-grade],[data-dir],[data-gtopic],[data-topic],[data-del]');
   if (!t) return;
   const d = t.dataset;
@@ -213,7 +268,8 @@ async function onClick(e) {
     case 'start': if (startSession({})) render(); return;
     case 'more': R = null; startSession({ more: 10 }); return render();
     case 'flip': return flip();
-    case 'quit': R = null; tts.stop(); return render();
+    case 'mine': return openMine(R.queue[R.idx]);
+    case 'quit': R = null; voice.stopAll(); return render();
     case 'gen': return runGenerate();
     case 'gen-add': return addGenerated();
   }

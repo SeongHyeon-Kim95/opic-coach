@@ -1,10 +1,12 @@
 // 오프라인 지원: 온라인이면 항상 최신 파일(network-first), 오프라인이면 마지막으로 받은 파일
-const CACHE = 'opic-daily-v1';
+const CACHE = 'opic-daily-v2';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/util.js', 'js/store.js', 'js/gemini.js', 'js/prompts.js', 'js/audio.js', 'js/tts.js', 'js/srs.js',
   'js/plan.js', 'js/install.js', 'js/feedback-view.js', 'js/data/topics.js', 'js/data/seed-vocab.js',
+  'js/aivoice.js', 'js/metrics.js', 'js/drill.js', 'js/recui.js', 'js/keysetup.js',
   'js/screens/home.js', 'js/screens/speak.js', 'js/screens/review.js', 'js/screens/notes.js', 'js/screens/settings.js',
+  'js/screens/mock.js', 'js/screens/welcome.js',
   'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
